@@ -4,6 +4,7 @@ from django.utils import timezone
 
 from django.db import models
 from django.utils.text import slugify
+from django.core import validators
 # Create your models here.
 
 
@@ -12,8 +13,12 @@ class Merchant(models.Model):
     name = models.CharField(max_length=255, verbose_name="Name")
     merchant_id = models.SlugField(max_length=255, unique=True, verbose_name="MerchantID")
     description = models.TextField(verbose_name="Description", blank=True, null=True)
-    email = models.EmailField(verbose_name="Email", )
+    email = models.EmailField(verbose_name="Email", null=True ,blank=True)
+    phone = models.IntegerField(verbose_name='PhoneNumber' ,validators=[validators.MinLengthValidator(11), validators.MaxLengthValidator(11)], default=0)
     password = models.CharField(max_length=255, verbose_name="Password")
+    code = models.IntegerField(verbose_name="OTP" , validators=[validators.MinLengthValidator(6), validators.MaxLengthValidator(6)], null=True ,blank=True)
+    expair_code = models.DateTimeField(blank=True, null=True, verbose_name="ExpairCode")
+    used_code_at = models.DateTimeField(blank=True, null=True, verbose_name="UsedCodeAt")
     is_active = models.BooleanField(default=False, verbose_name="IsActive")
     is_approved = models.BooleanField(default=False, verbose_name="IsApproved")
     created_at = models.DateTimeField(auto_now_add=True, verbose_name="CreatedAt")
