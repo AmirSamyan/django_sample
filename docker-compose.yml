@@ -1,5 +1,11 @@
 
 services:
+  redis:
+    image: redis:alpine
+    container_name: redis_cache
+    restart: always
+    ports:
+      - "6379:6379"
   db:
     image: postgres:16-alpine
     container_name: postgres_db
@@ -14,12 +20,11 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
   django:
-    image: django
     container_name: helen_pos
     build:
       context: .
       dockerfile: Dockerfile
-    command: sh -c "python manage.py makemigrations && python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
+    command: sh -c "python manage.py migrate && python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
     ports:
@@ -33,6 +38,29 @@ services:
       DB_PORT: 5432
     depends_on:
       - db  
+      - redis
+
+  celery:
+    container_name: celery_worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: sh -c "celery -A config worker --loglevel=info"
+    volumes:
+      - .:/app
+    environment:
+      
+      DB_NAME: mydb
+      DB_USER: AmirSamyan
+      DB_PASSWORD: 123456789
+      DB_HOST: db
+      DB_PORT: 5432
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      - db  
+      - redis    
+      - django
 
 volumes:
   postgres_data:   

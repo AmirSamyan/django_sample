@@ -1,5 +1,6 @@
-from math import e
+
 import random
+
 
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
@@ -11,6 +12,8 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated , AllowAny
 from django.db import transaction
 from django.utils import timezone
+
+from api.taks import send_email_task, send_otp
 from cart.models import Cart, CartItem
 from cart.serializer import *
 
@@ -63,7 +66,7 @@ class MerchantVrifyOtpView(generics.GenericAPIView):
             merchant = get_object_or_404(Merchant, id=serializer.validated_data['merchant_id'] 
                                          ,expair_code__gt=timezone.now() , 
                                          used_code_at__isnull=True,code=serializer.validated_data['code'])
-            merchant.is_approved = True
+            
             merchant.used_code_at = timezone.now()
 
             merchant.save()
@@ -105,6 +108,8 @@ class MerchantRetrieveView(generics.RetrieveAPIView):
         merchant_id = kwargs.get('pk')
         merchant = get_object_or_404(Merchant, id=merchant_id , is_active=True ,is_approved=True)
         serializer = self.get_serializer(merchant)
+        send_otp.delay(merchant.code)
+        send_email_task.delay(merchant.code, [merchant.email])
         return Response(serializer.data)
 
      

@@ -13,16 +13,17 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 from datetime import timedelta
 from pathlib import Path
 import os
+from dotenv import load_dotenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
+load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-wlg9rzreq-4ylmayx%k!&o+up7hx#fu$+7m3=7(-i$a^y3w$l6'
+SECRET_KEY = os.environ.get('SECRET_KEY')
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
@@ -69,8 +70,11 @@ ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
     {
+       
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [
+                BASE_DIR / 'templates'
+        ],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -168,3 +172,15 @@ INTERNAL_IPS = [
     "127.0.0.1",
     # ...
 ]
+
+CELERY_BROKER_URL = os.environ.get('CELERY_BROKER_URL', 'redis://redis:6379')
+CELERY_RESULT_BACKEND = os.environ.get('CELERY_RESULT_BACKEND', 'redis://redis:6379')
+
+EMAIL_HOST = os.environ.get('EMAIL_HOST')
+EMAIL_PORT = os.environ.get('EMAIL_PORT') 
+EMAIL_USE_TLS = os.environ.get('EMAIL_USE_TLS') == 'True' 
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
+SECRET_KEY = os.environ.get('SECRET_KEY')
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
