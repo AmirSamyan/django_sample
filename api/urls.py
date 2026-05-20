@@ -5,6 +5,9 @@ from api.views import *
 
 urlpatterns = [
     path('merchant/', MerchantCreateView.as_view(), name='merchant-create'),
+    
+    path('merchant/otp/', MerchantVrifyOtpView.as_view(), name='merchant-otp'),
+    path('merchant/otp/resend/', MerchantVrifyOtpResendView.as_view(), name='merchant-otp-resend'),
     path('merchant/<int:pk>/', MerchantRetrieveView.as_view(), name='merchant-retrieve'),
 
 

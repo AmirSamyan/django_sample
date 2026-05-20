@@ -1,3 +1,6 @@
+from math import e
+import random
+
 from django.contrib.auth import get_user_model
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
@@ -6,13 +9,13 @@ from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated , AllowAny
-
-
+from django.db import transaction
+from django.utils import timezone
 from cart.models import Cart, CartItem
 from cart.serializer import *
-import merchant
+
 from merchant.models import Merchant
-from merchant.serializer import MerchantCreateSerializer, MerchantSerializer
+from merchant.serializer import MerchantCreateSerializer, MerchantOtpResendSerializer, MerchantOtpSerializer, MerchantSerializer
 from order.models import Order, OrderItem
 from order.serializer import OrderSerializer, OrderPaymentSerializer
 from product.models import Product, Category
@@ -30,15 +33,68 @@ class MerchantCreateView(generics.CreateAPIView):
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        merchant=Merchant.objects.create(
-            name=serializer.validated_data['name'],
-            email=serializer.validated_data['email'],       
-            password=serializer.validated_data['password'],
-            description=serializer.validated_data.get('description', '')
-        )
+        if self.queryset.filter(email=serializer.validated_data['email'] , phone = serializer.validated_data['phone']).exists():
+            return Response({'msg': "Merchant with this email or phone already exists"}, status=status.HTTP_400_BAD_REQUEST)
+        with transaction.atomic():
+            code = str(random.randint(100000, 999999))
+            merchant=Merchant.objects.create(
+                name=serializer.validated_data['name'],
+                email=serializer.validated_data['email'],     
+                phone =serializer.validated_data['phone'],  
+                password=serializer.validated_data['password'],
+                description=serializer.validated_data.get('description', ''),
+                code=code,
+                expair_code=timezone.now() + timezone.timedelta(minutes=2)
+            )
         if merchant:
-            return Response({'msg': "Merchant created successfully wait for approval"}, status=status.HTTP_201_CREATED)
+            return Response({'msg': f"Merchant created successfully wait for approval merchant:{merchant.pk} code:{code}"}, status=status.HTTP_201_CREATED)
         return Response({'msg': "Failed to create merchant"}, status=status.HTTP_400_BAD_REQUEST)
+    
+class MerchantVrifyOtpView(generics.GenericAPIView):
+    queryset = Merchant.objects.all()
+    serializer_class = MerchantOtpSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            merchant = get_object_or_404(Merchant, id=serializer.validated_data['merchant_id'] 
+                                         ,expair_code__gt=timezone.now() , 
+                                         used_code_at__isnull=True,code=serializer.validated_data['code'])
+            merchant.is_approved = True
+            merchant.used_code_at = timezone.now()
+
+            merchant.save()
+            return Response({'msg': "Merchant approved successfully"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'msg': "Invalid code or code expired"}, status=status.HTTP_400_BAD_REQUEST)
+          
+class MerchantVrifyOtpResendView(generics.GenericAPIView):
+    queryset = Merchant.objects.all()
+    serializer_class = MerchantOtpResendSerializer
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        merchant_id = serializer.validated_data['merchant_id']
+        try:
+            merchant = get_object_or_404(Merchant, id=merchant_id , expair_code__lt=timezone.now() , used_code_at__isnull=True)
+            if merchant.is_approved:
+                return Response({'msg': "Merchant is already approved"}, status=status.HTTP_400_BAD_REQUEST)
+
+            code = str(random.randint(100000, 999999))
+            merchant.code = code
+            merchant.expair_code = timezone.now() + timezone.timedelta(minutes=2)
+            merchant.used_code_at = None
+            merchant.save()
+
+            return Response({'msg': f"OTP resent successfully code:{code}"}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'msg': "cant get new code wait after a few minutes try again"}, status=status.HTTP_404_NOT_FOUND)
+        
 
 class MerchantRetrieveView(generics.RetrieveAPIView):
     queryset = Merchant.objects.all()
