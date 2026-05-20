@@ -1,8 +1,10 @@
 
+
 import random
+from weakref import ref
 
 
-from django.contrib.auth import get_user_model
+
 from django.db.models import Sum
 from django.shortcuts import get_object_or_404
 from rest_framework import generics
@@ -17,14 +19,19 @@ from api.taks import send_email_task, send_otp
 from cart.models import Cart, CartItem
 from cart.serializer import *
 
+import merchant
 from merchant.models import Merchant
 from merchant.serializer import MerchantCreateSerializer, MerchantOtpResendSerializer, MerchantOtpSerializer, MerchantSerializer
 from order.models import Order, OrderItem
 from order.serializer import OrderSerializer, OrderPaymentSerializer
 from product.models import Product, Category
 from product.serializer import ProductSerializer, CategorySerializer
+import user
+from user.models import User
+from user.serializer import UserPinCodeSerializer, UserSerializer
+from rest_framework_simplejwt.tokens import RefreshToken
 
-User = get_user_model()
+
 
 
 # Create your views here.
@@ -98,7 +105,6 @@ class MerchantVrifyOtpResendView(generics.GenericAPIView):
         except Exception as e:
             return Response({'msg': "cant get new code wait after a few minutes try again"}, status=status.HTTP_404_NOT_FOUND)
         
-
 class MerchantRetrieveView(generics.RetrieveAPIView):
     queryset = Merchant.objects.all()
     serializer_class = MerchantSerializer
@@ -108,10 +114,49 @@ class MerchantRetrieveView(generics.RetrieveAPIView):
         merchant_id = kwargs.get('pk')
         merchant = get_object_or_404(Merchant, id=merchant_id , is_active=True ,is_approved=True)
         serializer = self.get_serializer(merchant)
-        send_otp.delay(merchant.code)
-        send_email_task.delay(merchant.code, [merchant.email])
+        
         return Response(serializer.data)
 
+
+class UserLoginView(generics.GenericAPIView):
+
+
+    queryset = User.objects.all()
+    serializer_class = UserPinCodeSerializer
+    permission_classes =[AllowAny]
+
+    def post(self, request, *args, **kwargs):
+       
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        merchant_id = serializer.validated_data['merchant_id']
+        pin_code = serializer.validated_data['pin_code']
+
+        try:
+            user = User.objects.select_related('merchant').get(pin_code =pin_code ,merchant_id =int(merchant_id) )
+            print("user",user)
+            # if user.check_password(pin_code):
+            refresh = RefreshToken.for_user(user)
+            print("refresh",refresh)
+            print("refresh",refresh.access_token)
+            user_data = {
+                'id': user.pk,
+                'first_name': user.first_name,
+                'last_name': user.last_name,
+                'token': str(refresh.access_token),
+                'refresh_token': str(refresh),
+
+                }
+
+
+            response_serializer = UserSerializer(data=user_data)
+            response_serializer.is_valid(raise_exception=True)
+            return Response(response_serializer.data, status=status.HTTP_200_OK)
+            # else:
+            #     return Response({'msg': "Invalid pin code"}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            print("Exception",e)
+            return Response({'msg': "User not found "}, status=status.HTTP_404_NOT_FOUND)
      
 
 class CustomPagination(PageNumberPagination):

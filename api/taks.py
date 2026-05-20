@@ -2,7 +2,6 @@
 
 
 from email.mime import message
-from multiprocessing import context
 
 from celery import shared_task
 
@@ -28,7 +27,7 @@ def send_email_task( otp, recipient_list):
     )
     msg.attach_alternative(html_content, "text/html")
     msg.send()  
-    return True
+    
 
 
 @shared_task

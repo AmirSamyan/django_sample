@@ -10,6 +10,8 @@ urlpatterns = [
     path('merchant/otp/resend/', MerchantVrifyOtpResendView.as_view(), name='merchant-otp-resend'),
     path('merchant/<int:pk>/', MerchantRetrieveView.as_view(), name='merchant-retrieve'),
 
+    path('login', UserLoginView.as_view(), name='user-login'),
+
 
     path('categories/', CategoryListView.as_view(), name='categories'),
     path('category/', CategoryCreate.as_view(), name='category'),
