@@ -1,6 +1,7 @@
 
 
 
+from tabnanny import verbose
 import token
 
 from rest_framework import serializers
@@ -18,4 +19,9 @@ class UserSerializer(serializers.Serializer):
     first_name = serializers.CharField(max_length=150, required=True, help_text="First name of the user")
     last_name = serializers.CharField(max_length=150, required=True, help_text="Last name of the user")
     token = serializers.CharField(max_length=512,  help_text="Authentication token for the user")
-    refresh_token = serializers.CharField(max_length=512,  help_text="Refresh token for the user")    
+    refresh_token = serializers.CharField(max_length=512,  help_text="Refresh token for the user")   
+
+
+class UserRefreshTokenSerializer(serializers.Serializer):
+    refresh_token = serializers.CharField(max_length=512)
+    user_id = serializers.CharField(max_length=255,help_text="")

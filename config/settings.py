@@ -50,7 +50,8 @@ INSTALLED_APPS = [
     'user',
     'product',
     'order',
-    'cart'
+    'cart',
+    'inventory',
 
 ]
 
@@ -67,6 +68,8 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+
+AUTH_USER_MODEL = 'user.User'
 
 TEMPLATES = [
     {
@@ -153,6 +156,16 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": (
     "rest_framework.permissions.IsAuthenticated",
     )
+}
+
+# Redis-backed cache for hot POS reads (catalog, inventory snapshots).
+# Do NOT use cache for stock validation during checkout.
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://redis:6379/1')
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.redis.RedisCache',
+        'LOCATION': REDIS_URL,
+    }
 }
 SIMPLE_JWT = {
    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),

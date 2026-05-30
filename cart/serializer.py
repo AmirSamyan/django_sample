@@ -21,7 +21,7 @@ class CartItemCreateSerializer(serializers.Serializer):
 
 
 class CartViewSerializer(serializers.Serializer):
-    user=serializers.PrimaryKeyRelatedField(read_only=True,source='cart')
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
     cart_items = CartItemViewSerializer(read_only=True,many=True ,source='items')
     cart_total = serializers.SerializerMethodField(read_only=True)
     @extend_schema_field(Decimal)
@@ -36,7 +36,6 @@ class CartViewSerializer(serializers.Serializer):
 class CartCreateSerializer(serializers.Serializer):
     user_id = serializers.IntegerField()
     cart_id = serializers.IntegerField(read_only=True )
-
 
 
 

@@ -1,7 +1,6 @@
 
 
 import random
-from weakref import ref
 
 
 
@@ -11,9 +10,10 @@ from rest_framework import generics
 from rest_framework import status
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated , AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db import transaction
 from django.utils import timezone
+from django.core.cache import cache
 
 from api.taks import send_email_task, send_otp
 from cart.models import Cart, CartItem
@@ -28,8 +28,11 @@ from product.models import Product, Category
 from product.serializer import ProductSerializer, CategorySerializer
 import user
 from user.models import User
-from user.serializer import UserPinCodeSerializer, UserSerializer
+from user.serializer import UserPinCodeSerializer, UserRefreshTokenSerializer, UserSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
+
+from api.tenancy import resolve_merchant
+from inventory.models import StockItem, StockMovement, Location
 
 
 
@@ -57,7 +60,8 @@ class MerchantCreateView(generics.CreateAPIView):
                 expair_code=timezone.now() + timezone.timedelta(minutes=2)
             )
         if merchant:
-            return Response({'msg': f"Merchant created successfully wait for approval merchant:{merchant.pk} code:{code}"}, status=status.HTTP_201_CREATED)
+            # Never return OTP in response.
+            return Response({'msg': f"Merchant created successfully. wait for approval merchant:{merchant.pk}"}, status=status.HTTP_201_CREATED)
         return Response({'msg': "Failed to create merchant"}, status=status.HTTP_400_BAD_REQUEST)
     
 class MerchantVrifyOtpView(generics.GenericAPIView):
@@ -75,7 +79,7 @@ class MerchantVrifyOtpView(generics.GenericAPIView):
                                          used_code_at__isnull=True,code=serializer.validated_data['code'])
             
             merchant.used_code_at = timezone.now()
-
+            merchant.is_approved = True
             merchant.save()
             return Response({'msg': "Merchant approved successfully"}, status=status.HTTP_200_OK)
         except Exception as e:
@@ -101,7 +105,7 @@ class MerchantVrifyOtpResendView(generics.GenericAPIView):
             merchant.used_code_at = None
             merchant.save()
 
-            return Response({'msg': f"OTP resent successfully code:{code}"}, status=status.HTTP_200_OK)
+            return Response({'msg': "OTP resent successfully"}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'msg': "cant get new code wait after a few minutes try again"}, status=status.HTTP_404_NOT_FOUND)
         
@@ -129,16 +133,14 @@ class UserLoginView(generics.GenericAPIView):
        
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        merchant_id = serializer.validated_data['merchant_id']
+        merchant_slug = kwargs.get('merchant_id')
+        merchant = resolve_merchant(request=request, merchant_id=merchant_slug)
         pin_code = serializer.validated_data['pin_code']
 
         try:
-            user = User.objects.select_related('merchant').get(pin_code =pin_code ,merchant_id =int(merchant_id) )
-            print("user",user)
+            user = User.objects.select_related('merchant').get(pin_code=pin_code, merchant=merchant)
             # if user.check_password(pin_code):
             refresh = RefreshToken.for_user(user)
-            print("refresh",refresh)
-            print("refresh",refresh.access_token)
             user_data = {
                 'id': user.pk,
                 'first_name': user.first_name,
@@ -154,10 +156,10 @@ class UserLoginView(generics.GenericAPIView):
             return Response(response_serializer.data, status=status.HTTP_200_OK)
             # else:
             #     return Response({'msg': "Invalid pin code"}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as e:
-            print("Exception",e)
+        except Exception:
             return Response({'msg': "User not found "}, status=status.HTTP_404_NOT_FOUND)
      
+
 
 class CustomPagination(PageNumberPagination):
     # page_size_query_param = 'page'
@@ -187,15 +189,38 @@ class CategoryListView(generics.ListAPIView):
     serializer_class = CategorySerializer
     pagination_class = CustomPagination
 
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Category.objects.filter(merchant=merchant, is_active=True, is_delete=False).order_by('title')
+
+    def list(self, request, *args, **kwargs):
+        merchant = resolve_merchant(request=request, merchant_id=kwargs['merchant_id'])
+        # Cache hot catalog reads; invalidation strategy to be added (versioned keys).
+        cache_key = f"catalog:{merchant.id}:categories"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+        resp = super().list(request, *args, **kwargs)
+        cache.set(cache_key, resp.data, timeout=60)
+        return resp
+
     
 class CategoryCreate(generics.CreateAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
 
+    def perform_create(self, serializer):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        serializer.save(merchant=merchant)
+
 
 class CategoryDelete(generics.DestroyAPIView):
     queryset = Category.objects.all()
     serializer_class = CategorySerializer
+
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Category.objects.filter(merchant=merchant)
 
 
 class ProductListView(generics.ListAPIView):
@@ -203,20 +228,46 @@ class ProductListView(generics.ListAPIView):
     serializer_class = ProductSerializer
     pagination_class = CustomPagination
 
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Product.objects.filter(merchant=merchant, is_active=True, is_delete=False).select_related('category').order_by('title')
+
+    def list(self, request, *args, **kwargs):
+        merchant = resolve_merchant(request=request, merchant_id=kwargs['merchant_id'])
+        cache_key = f"catalog:{merchant.id}:products"
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return Response(cached)
+        resp = super().list(request, *args, **kwargs)
+        cache.set(cache_key, resp.data, timeout=60)
+        return resp
+
 
 class ProductCreate(generics.CreateAPIView):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
+
+    def perform_create(self, serializer):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        serializer.save(merchant=merchant)
 
 
 class ProductDelete(generics.DestroyAPIView):
     queryset = Product.objects.all()
     serializer_class = ProductSerializer
 
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Product.objects.filter(merchant=merchant)
+
 
 class CartRetrieveView(generics.RetrieveAPIView):
-    queryset = Cart.objects.prefetch_related('items').all()
+    queryset = Cart.objects.prefetch_related('items__product').all()
     serializer_class = CartViewSerializer
+
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Cart.objects.filter(user__merchant=merchant).prefetch_related('items__product')
 
 
 class CartCreateView(generics.CreateAPIView):
@@ -224,10 +275,11 @@ class CartCreateView(generics.CreateAPIView):
     serializer_class = CartCreateSerializer
 
     def create(self, request, *args, **kwargs):
+        merchant = resolve_merchant(request=request, merchant_id=kwargs['merchant_id'])
         user_id = request.data.get("user_id")
         try:
             if user_id:
-                user = get_object_or_404(User, id=user_id)
+                user = get_object_or_404(User, id=user_id, merchant=merchant)
 
                 cart = Cart.objects.create(user=user)
 
@@ -242,8 +294,9 @@ class CartItemAddView(generics.CreateAPIView):
     serializer_class = CartItemCreateSerializer
 
     def create(self, request, *args, **kwargs):
+        merchant = resolve_merchant(request=request, merchant_id=kwargs['merchant_id'])
         cart_id = request.data.get("cart_id")
-        cart = get_object_or_404(Cart, id=cart_id)
+        cart = get_object_or_404(Cart, id=cart_id, user__merchant=merchant)
         if cart.is_active:
             product_id = request.data.get("product_id")
             try:
@@ -251,7 +304,7 @@ class CartItemAddView(generics.CreateAPIView):
             except (ValueError, TypeError):
                 return Response({'error': 'Quantity must be integer'}, status=status.HTTP_400_BAD_REQUEST)
 
-            cart_item = self.queryset.filter(cart=cart, product=product_id).first()  
+            cart_item = self.queryset.filter(cart=cart, product_id=product_id).select_related('product').first()
 
             if cart_item and quantity_to_add > 0:
                 cart_item.quantity += quantity_to_add
@@ -262,7 +315,7 @@ class CartItemAddView(generics.CreateAPIView):
                 serializer = CartItemCreateSerializer(data=request.data)
 
             if serializer.is_valid():
-                product = get_object_or_404(Product, id=product_id)
+                product = get_object_or_404(Product, id=product_id, merchant=merchant)
                 cart = CartItem.objects.create(cart=cart, product=product, quantity=quantity_to_add)
                 final_serializer = CartItemViewSerializer(cart)
                 return Response(final_serializer.data, status=status.HTTP_201_CREATED)
@@ -270,9 +323,13 @@ class CartItemAddView(generics.CreateAPIView):
 
 
 class OrderListView(generics.ListAPIView):
-    queryset = Order.objects.all().prefetch_related('product')
+    queryset = Order.objects.all().prefetch_related('items__product')
     serializer_class = OrderSerializer
     pagination_class = CustomPagination
+
+    def get_queryset(self):
+        merchant = resolve_merchant(request=self.request, merchant_id=self.kwargs['merchant_id'])
+        return Order.objects.filter(user__merchant=merchant).prefetch_related('items__product').order_by('-created_at')
 
 
 class CreateOrderView(generics.CreateAPIView):
@@ -280,53 +337,100 @@ class CreateOrderView(generics.CreateAPIView):
     serializer_class = OrderPaymentSerializer
 
     def create(self, request, *args, **kwargs):
-
+        merchant = resolve_merchant(request=request, merchant_id=kwargs['merchant_id'])
         cart_id = request.data.get("cart_id")
         user_id = request.data.get("user_id")
 
         if cart_id is None and user_id is None:
             return Response({'error': 'Cart id or User id must be provided'}, status=status.HTTP_400_BAD_REQUEST)
 
-        cart:Cart = get_object_or_404(Cart, id=cart_id)
-        user = get_object_or_404(User, id=user_id)
+        cart: Cart = get_object_or_404(Cart, id=cart_id, user__merchant=merchant)
+        user = get_object_or_404(User, id=user_id, merchant=merchant)
         if cart.is_active:
             try:
-               
-                total_price = cart.items.all().aggregate(Sum('total_price'))['total_price__sum'] or 0
-                order_data = {
-                    'user': user.pk,
-                    'status': Order.Status.PENDING,
-                    'subtotal': total_price,
-                    'shipping_cost': total_price,
-                    'total_amount': total_price,
-                    'payment_ref': None,
-                    'notes': request.data.get('notes'),
+                cart_items = list(CartItem.objects.filter(cart=cart).select_related('product'))
+                if not cart_items:
+                    return Response({'error': 'cart is empty'}, status=status.HTTP_400_BAD_REQUEST)
 
-                }
-                order_serializer = OrderSerializer(data=order_data)
+                with transaction.atomic():
+                    # Default location for merchant (create later via admin).
+                    location = Location.objects.filter(merchant=merchant, is_default=True, is_active=True).first()
+                    if location is None:
+                        location = Location.objects.create(merchant=merchant, name='Default', is_default=True)
 
-                order_serializer.is_valid(raise_exception=True)
-                new_order = order_serializer.save()
+                    product_ids = [ci.product_id for ci in cart_items]
+                    stock_rows = (
+                        StockItem.objects.select_for_update()
+                        .filter(merchant=merchant, location=location, product_id__in=product_ids)
+                        .select_related('product')
+                    )
+                    stock_by_product = {s.product_id: s for s in stock_rows}
 
-                cart_items = CartItem.objects.filter(cart=cart)
+                    # Ensure all products have stock rows.
+                    missing = [pid for pid in product_ids if pid not in stock_by_product]
+                    if missing:
+                        for pid in missing:
+                            stock_by_product[pid] = StockItem.objects.create(
+                                merchant=merchant,
+                                location=location,
+                                product_id=pid,
+                                on_hand=0,
+                            )
 
-                order_items_to_create = []
-                for item in cart_items:
-                    order_items_to_create.append(
+                    # Validate stock.
+                    for ci in cart_items:
+                        stock = stock_by_product[ci.product_id]
+                        if stock.on_hand < ci.quantity:
+                            return Response(
+                                {'error': f'insufficient stock for product {ci.product_id}'},
+                                status=status.HTTP_409_CONFLICT,
+                            )
+
+                    total_price = sum([ci.total_price for ci in cart_items])
+                    order_data = {
+                        'user': user.pk,
+                        'status': Order.Status.PENDING,
+                        'subtotal': total_price,
+                        'shipping_cost': 0,
+                        'total_amount': total_price,
+                        'payment_ref': None,
+                        'notes': request.data.get('notes'),
+                    }
+                    order_serializer = OrderSerializer(data=order_data)
+                    order_serializer.is_valid(raise_exception=True)
+                    new_order = order_serializer.save()
+
+                    order_items_to_create = [
                         OrderItem(
                             order=new_order,
-                            product=item.product,
-                            quantity=item.quantity,
-                            price=item.price,
-                            total_price=item.total_price,
+                            product=ci.product,
+                            quantity=ci.quantity,
+                            price=ci.price,
+                            total_price=ci.total_price,
                         )
-                    )
+                        for ci in cart_items
+                    ]
                     OrderItem.objects.bulk_create(order_items_to_create)
-                    final_order_serializer = OrderSerializer(new_order)
-                    cart.is_active = False
-                    cart.save()
 
-                    return Response(final_order_serializer.data, status=status.HTTP_201_CREATED)
+                    for ci in cart_items:
+                        stock = stock_by_product[ci.product_id]
+                        stock.on_hand -= ci.quantity
+                        stock.save(update_fields=['on_hand', 'updated_at'])
+                        StockMovement.objects.create(
+                            merchant=merchant,
+                            location=location,
+                            product=ci.product,
+                            qty_delta=-ci.quantity,
+                            reason=StockMovement.Reason.SALE,
+                            ref_type='order',
+                            ref_id=str(new_order.pk),
+                        )
+
+                    cart.is_active = False
+                    cart.save(update_fields=['is_active', 'updated_at'])
+
+                final_order_serializer = OrderSerializer(new_order)
+                return Response(final_order_serializer.data, status=status.HTTP_201_CREATED)
 
             except Exception as e:
                 print(e)

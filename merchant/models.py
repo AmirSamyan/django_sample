@@ -26,9 +26,11 @@ class Merchant(models.Model):
     approved_at = models.DateTimeField(blank=True, null=True, verbose_name="ApprovedAt")
 
     def save(self, *args, **kwargs):
-        number = randint(1000, 9999)
-        self.password = make_password(self.password)
-        self.merchant_id = slugify(f"{self.name}-{number}")
+        # Only set merchant_id/password on first create.
+        if not self.pk:
+            number = randint(1000, 9999)
+            self.password = make_password(self.password)
+            self.merchant_id = slugify(f"{self.name}-{number}")
         if self.is_approved :
             self.is_active = True
             self.approved_at = timezone.now()
